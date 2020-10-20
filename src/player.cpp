@@ -12,6 +12,11 @@
 
 // user define begin
 //********************************************************************************************************************************//
+enum headFollowTarget_type
+{
+    ball,
+    goal
+}headFollowTarget;
 
 struct pid_type
 {
@@ -26,10 +31,16 @@ struct pid_type
 void pidCal(pid_type& obj,float val);
 
 #define SGN(x) ((x)>0?(1):((x)<0?(-1):(0)))
+const float FIND_HEADANGLE_YAW_MAX=15.0;
+const int FIND_GOAL_INTERVAL=400;
+const int RID_DEFENSE_TIME=50;
 
 //********************************************************************************************************************************//
 
 cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode);//update:ballInView & ballFoundFlag ; goalInView & goalFoundFlag
+void followBall(common::msg::HeadAngles headAngle,common::msg::BodyTask btask,rclcpp::Node::SharedPtr playerNode);
+void findBall(common::msg::HeadTask htask,common::msg::BodyTask btask);
+void yawControl(float yawTarget,common::msg::BodyTask btask,common::msg::ImuData imuData);
 
 //********************************************************************************************************************************//
 
@@ -42,12 +53,15 @@ int ballNotFoundElapse=0;
 cv::RotatedRect goalInView;
 bool goalFoundFlag;
 
-const int timer=400;
+cv::RotatedRect robotInView;
+bool robotFoundFlag;
+int robotFoundTime=0;
+
+//const int timer=400;
 int secondFlag=0;
-bool knowDirection=true;
+//bool bodyToGoal=true;
 bool ballInControl=true;
-bool bodyToGoal=true;
-bool isOnLine=true;
+float yawTarget=0;
     
 int imgRow=0,imgCol=0;
 
@@ -225,15 +239,18 @@ int main(int argc, char ** argv)
         // 将机器人的当前朝向减去init时的朝向，即可得到机器人相对于初始位置的方向，
         // 这样可以保证自己不管是红色或者蓝色，其yaw都是在面朝对方球门时为0
         // 下面提供这种转换的方法，需要该转换的可以把注释符号去掉
-        // imuData.yaw = imuData.yaw - initYaw; 
+        imuData.yaw = imuData.yaw - initYaw; 
 
         // IMU数据里的yaw信息是统一的，属于绝对方向，但是红色机器人和蓝色机器人的进球方向是不一样的，
         // 假如红色的进球方向是0度，则蓝色的进球方向就是180度
         // 比赛时使用什么颜色的机器人是现场决定的，所以对于两种颜色的机器人，都需要考虑如何
         // 如果使用了上面的转换方法，则不需要再关心不同颜色机器人的方向问题
-        if (myColor == COLOR_RED) {
+        if (myColor == COLOR_RED) 
+        {
             // 使用的红色的机器人
-        } else if (myColor == COLOR_BLUE) {
+        } 
+        else if (myColor == COLOR_BLUE) 
+        {
             // 使用的蓝色的机器人
         }
 
@@ -241,277 +258,12 @@ int main(int argc, char ** argv)
         // 机器人出界后，会将出界的机器人放回己方半场靠近中线的约0.5米处，此时该机器人会有30s的惩罚
         // 由于有两台机器人，每一天机器人重生的位置都是在己方固定的某一边，并不是从哪边出去就从哪边重生，
         // 具体哪一台从哪边重生，请自行运行仿真查看
-        if (myId == 1) {
-            
-            // btask.type=btask.TASK_WALK;
-            if(ballFoundFlag||ballNotFoundElapse<0*10)
-            {
-                if(!ballFoundFlag)
-                    ballNotFoundElapse++;
-                else
-                    ballNotFoundElapse=0;
-                    
+        if (myId == 1) 
+        {
 
-
-                
-                horiFollow.target=imgCol/2;
-                pidCal(horiFollow,ballInView[0]);
-                htask.yaw-=horiFollow.output;
-                // htask.yaw=htask.yaw<0?htask.yaw+360:htask.yaw;
-                // htask.yaw=htask.yaw>360?htask.yaw-360:htask.yaw;
-                
-                vertFollow.target=imgRow/2;
-                pidCal(vertFollow,ballInView[1]);
-                htask.pitch+=vertFollow.output;
-                htask.pitch=htask.pitch<0?0:htask.pitch;
-                htask.pitch=htask.pitch>90?90:htask.pitch;
-
-                // bodyFollow.target=headAngle.yaw;
-                // while(bodyFollow.target>=180)bodyFollow.target-=360;
-                // while(bodyFollow.target<-180)bodyFollow.target+=360;
-                bodyFollow.target=0;
-                pidCal(bodyFollow,headAngle.yaw);
-                btask.turn=bodyFollow.output;
-                if(abs(bodyFollow.curError)<5)
-                    bodyFollow.isEnabled=false;
-
-
-                RCLCPP_INFO(playerNode->get_logger(),"%lf",btask.turn);
-
-
-                // btask.step=-1;
-                
-
-                // static bool hfocusedflag,vfocusedflag;
-
-                // // body yaw
-                // if(ballInView[0]<imgCol/2+25&&ballInView[0]>imgCol/2-25)
-                // {
-                //     btask.turn=0;
-                //     btask.step=5;
-                //     RCLCPP_INFO(playerNode->get_logger(),"%s--forward",argv[1]);
-                //     hfocusedflag=true;
-                // }
-                // else
-                // {
-                //     btask.turn=(-0.05)*(imgCol/2-ballInView[0]);
-                //     btask.lateral=(0.5)*(imgCol/2-ballInView[0]);
-                //     btask.step=-0.02;
-                //     RCLCPP_INFO(playerNode->get_logger(),"%s--turn/lateral",argv[1]);ros2 launch player player_launch.py color:=red
-                //     hfocusedflag=false;
-                // }
-
-                // // head pitch
-                // if(ballInView[1]<imgRow/2+25&&ballInView[1]>imgRow/2-25)
-                // {
-                //     RCLCPP_INFO(playerNode->get_logger(),"%s--focused",argv[1]);
-                //     vfocusedflag=true;
-                // }
-                // else
-                // {
-                //     htask.pitch+=(-0.02)*(imgRow/2-ballInView[1]);
-                //     htask.pitch=htask.pitch<0?0:htask.pitch;
-                //     htask.pitch=htask.pitch>90?90:htask.pitch;
-                //     RCLCPP_INFO(playerNode->get_logger(),"%s--focusing",argv[1]);
-                //     vfocusedflag=false;ros2 launch player player_launch.py color:=red
-                // {
-                //     btask.type=btask.TASK_ACT;
-                //     if(imuData.yaw>0)
-                //     {
-                //         btask.actname="left_kick";
-                //     }
-                //     else
-                //     {
-                //         btask.actname="right_kick";
-                //     }
-                // }
-
-                RCLCPP_INFO(playerNode->get_logger(),"secondFlag=%d",secondFlag);
-                RCLCPP_INFO(playerNode->get_logger(),"knowDirection=%d",knowDirection);
-                
-
-                if(abs(headAngle.yaw)>15)//保持对球控制初始化
-                    ballInControl=false;
-                else
-                    ballInControl=true;
-
-                // if((secondFlag%timer==0))//找到球门方向初始化
-                //     knowDirection=false;
-
-
-                static int alignedThreshold=30;
-                if(goalFoundFlag&&goalInView.size.area()>100000)
-                    alignedThreshold=60;
-                // else
-                //     alignedThreshold=25;
-
-                RCLCPP_INFO(playerNode->get_logger(),"------%d,%f",alignedThreshold,goalInView.size.area());
-                    
-
-                if(knowDirection&&ballInControl&&isOnLine)
-                {
-                    if(ballFoundFlag&&abs(headAngle.yaw)<15)
-                    {
-                        RCLCPP_INFO(playerNode->get_logger(),"Go Ahead!");
-                        btask.turn=0;
-                        btask.lateral=0;
-                        btask.step=1;
-                    }
-                    else if (ballFoundFlag==false)
-                    {
-                        RCLCPP_INFO(playerNode->get_logger(),"I lose the ball!");
-                    }
-                    else
-                    {
-                        RCLCPP_INFO(playerNode->get_logger(),"I am Tring to Follow the Ball!");
-                        //btask.turn=(-0.01)*(imgCol/2-ballInView[0]);
-                        btask.lateral=(0.5)*SGN(headAngle.yaw);
-                        btask.step=-0.01;
-                    }
-
-
-
-
-
-
-
-                    // head pitch
-                    // if(ballInView[1]<imgRow/2+25&&ballInView[1]>imgRow/2-25)
-                    // {
-                    //     RCLCPP_INFO(playerNode->get_logger(),"the Ball is In My Eyes!");
-                    // }
-                    // else
-                    // {
-                    //     RCLCPP_INFO(playerNode->get_logger(),"I am Finding the Ball!");
-                    //     htask.pitch+=(-0.02)*(imgRow/2-ballInView[1]);
-                    //     htask.pitch=htask.pitch<0?0:htask.pitch;
-                    //     htask.pitch=htask.pitch>90?90:htask.pitch;
-                    // }
-
-                    // if(180-abs(imuData.yaw)>5)
-                    // {
-                    //     RCLCPP_INFO(playerNode->get_logger(),"imuData.yaw=%f",imuData.yaw);
-                    //     if(imuData.yaw>0)
-                    //     {
-                    //         btask.lateral=-0.1;
-                    //         btask.step=-0.1;
-                    //         btask.turn=0.03;
-                    //     }
-                    //     else
-                    //     {
-                    //         btask.lateral=0.1;
-                    //         btask.step=-0.1;
-                    //         btask.turn=-0.03;
-                    //     }
-                    // }
-                }
-
-
-                if(!ballInControl)//失去对球控制退后重新控制
-                {
-                    RCLCPP_INFO(playerNode->get_logger(),"I am tring to control the ball again!");
-                    btask.lateral=(0.5)*SGN(headAngle.yaw);
-                    btask.step=-0.01;
-                    // btask.turn=-0.01*(htask.yaw);
-                }
-
-                if(abs(headAngle.yaw)>70)
-                {
-                    btask.turn=0;
-                    btask.lateral=0;
-                    btask.step=-1;
-                }
-
-
-                // if(!knowDirection)
-                // {
-                //     RCLCPP_INFO(playerNode->get_logger(),"Direction Finding```");
-                //     isOnLine=false;
-                //     btask.step=0;
-                //     btask.turn=0;
-                //     btask.lateral=0;
-                //     htask.pitch=0;
-                //
-                //     if(goalFoundFlag&&goalInView.center.x<imgCol/2+25&&goalInView.center.x>imgCol/2-25)
-                //     {
-                //         knowDirection=true;
-                //         bodyFollow.isEnabled=false;
-                //     }
-                //
-                //     else if(goalFoundFlag==false)//找球门
-                //     {
-                //         htask.yaw+=SGN(imuData.yaw)*10;
-                //     }
-                //     else//修正方向
-                //     {
-                //         bodyFollow.isEnabled=true;
-                //         //根据球门修正方向
-                //     }
-                // }
-
-                // if(!isOnLine)
-                // {
-                //     htask.pitch-=5;
-                //     if(ballFoundFlag&&ballInView[0]<imgCol/2+25&&ballInView[0]>imgCol/2-25)
-                //     {
-                //         isOnLine=true;
-                //     }
-                //     else if(!ballFoundFlag)
-                //     {
-                //         btask.turn=0;
-                //         btask.step=0;
-                //         btask.lateral=0;
-                //         RCLCPP_INFO(playerNode->get_logger(),"%s--stop",argv[1]);
-                //         RCLCPP_INFO(playerNode->get_logger(),"%s--finding the ball!",argv[1]);
-                //         htask.yaw+=SGN(ballInView[0]-imgCol/2)*5;
-                //         htask.pitch=20*sin(secondFlag*0.1)+20;
-                //         //找球
-                //     }
-                //     else
-                //     {
-                //         btask.step=-0.5;
-                //         btask.lateral=SGN(htask.yaw)*1;
-                //     }
-                // }
-
-                if(180-abs(imuData.yaw)>10)
-                {
-                    RCLCPP_INFO(playerNode->get_logger(),"imuData.yaw=%f",imuData.yaw);
-                    btask.step=0;
-                    btask.lateral=0;
-                    btask.turn=5*SGN(imuData.yaw);
-                      
-                }
-            }
-            
-            else
-            {
-
-                if(abs(headAngle.yaw)<45)
-                {
-                    btask.turn=0;
-                    btask.step=1;
-                    btask.lateral=0;
-                    RCLCPP_INFO(playerNode->get_logger(),"%s--ball lost,rush!!!!!!",argv[1]);
-                    htask.pitch=60;
-                }
-                else
-                {
-                    btask.turn=0;
-                    btask.step=-1;
-                    btask.lateral=0;
-                    RCLCPP_INFO(playerNode->get_logger(),"%s--ball lost,finding the ball!",argv[1]);
-                    htask.yaw=75*SGN(headAngle.yaw);
-                    htask.pitch=45;
-                }
-                
-                
-            }
-            RCLCPP_INFO(playerNode->get_logger(),"yaw=%f,pitch=%f,roll=%f",imuData.yaw,imuData.pitch,imuData.roll);
-            RCLCPP_INFO(playerNode->get_logger(),"headyaw=%f,pitch=%f",headAngle.yaw,headAngle.pitch);
-
-
-        } else if (myId == 2) {
+        } 
+        else if (myId == 2) 
+        {
             // 2号机器人
         }
 
@@ -794,8 +546,100 @@ return resultImg;
 }
 
 //********************************************************************************************************************************//
+//跟球移动
+void followBall(common::msg::HeadAngles headAngle,common::msg::BodyTask btask,rclcpp::Node::SharedPtr playerNode)
+{
+    if(abs(headAngle.yaw)>FIND_HEADANGLE_YAW_MAX)//保持对球控制初始化
+        ballInControl=false;
+    else
+        ballInControl=true;
+    
+    if(ballFoundFlag)
+    {
+        if(ballInControl)
+        {
+            RCLCPP_INFO(playerNode->get_logger(),"Go Ahead!");
+            btask.turn=0;
+            btask.lateral=0;
+            btask.step=1;
+        }
+        else
+        {
+            RCLCPP_INFO(playerNode->get_logger(),"I am Tring to Follow the Ball!");
+            btask.turn=0;
+            btask.lateral=(0.5)*SGN(headAngle.yaw);
+            btask.step=-0.01;
+        }
+    }
+    else
+    {
+        return ;
+    }
+    
+}
 
+//摆头找球
+void findBall(common::msg::HeadTask htask,common::msg::BodyTask btask)
+{
+    if(!ballFoundFlag)
+    {
+        htask.yaw=10;
+        htask.pitch=20*sin(secondFlag*0.1)+40;
+    }
+    else
+    {
+        return ;
+    }
+    
+}
 
+//稳定方向
+void yawControl(float yawTarget,common::msg::BodyTask btask,common::msg::ImuData imuData)
+{
+    if(abs(imuData.yaw-yawTarget)>10)
+    {
+        //👇写在main里面调试一下
+        //RCLCPP_INFO(playerNode->get_logger(),"imuData.yaw=%f",imuData.yaw);
+        btask.turn=5*SGN(imuData.yaw-yawTarget);
+    }
+    else
+    {
+        return ;
+    }
+    
+}
 
+//带球过人
+void passRobot()
+{
+    if(robotFoundFlag&&(robotFoundTime>RID_DEFENSE_TIME||robotFoundTime==0))
+    {
+        yawTarget+=SGN(robotInView.center.x-imgCol/2)*30;
+        robotFoundTime=1;//main中说明robotFoundTime++
+        //可能需要更改，可能因为碰到对方机器人疯狂旋转
+    }
+    else
+    {
+        return ;
+    }
+    
+}
+
+//寻找球门
+void findGoal(common::msg::HeadAngles headAngle,common::msg::HeadTask htask,common::msg::ImuData imuData)
+{
+    if(secondFlag%FIND_GOAL_INTERVAL==0&&robotFoundTime>RID_DEFENSE_TIME)
+    {
+        headFollowTarget=goal;
+        htask.pitch=0;
+        htask.yaw=-10*SGN(imuData.yaw);
+    }
+    else
+    {
+        return ;
+    }
+    yawTarget=imuData.yaw+headAngle.yaw;
+    headFollowTarget=ball;
+}
 //********************************************************************************************************************************//
 // function implementation end
