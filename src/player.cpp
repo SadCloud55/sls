@@ -4,6 +4,7 @@
 
 
 
+
 //github
 
 
@@ -12,6 +13,7 @@
 
 // user define begin
 //********************************************************************************************************************************//
+
 enum headFollowTarget_type
 {
     ball,
@@ -30,6 +32,11 @@ struct pid_type
 
 void pidCal(pid_type& obj,float val);
 
+// mean average filter weight
+float mafWeight[5]={0.05,0.15,0.25,0.35,0.20};
+
+float mafUpdate(float val,float* mafBuffer,int size);
+
 #define SGN(x) ((x)>0?(1):((x)<0?(-1):(0)))
 const float FIND_HEADANGLE_YAW_MAX=15.0;
 const int FIND_GOAL_INTERVAL=400;
@@ -37,7 +44,13 @@ const int RID_DEFENSE_TIME=50;
 
 //********************************************************************************************************************************//
 
-cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode);//update:ballInView & ballFoundFlag ; goalInView & goalFoundFlag
+// returns:processed image ; image:camera image ; playerNode:used to log data.
+// updates:ballInView & ballFoundFlag ; goalInView & goalFoundFlag.
+cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode);
+
+// htask:used to log control head ; target:center point of tracking object ; distance:estimated distance
+void headFollow(common::msg::HeadTask& htask,cv::Point2f target,float distance);
+
 void followBall(common::msg::HeadAngles headAngle,common::msg::BodyTask btask,rclcpp::Node::SharedPtr playerNode);
 void findBall(common::msg::HeadTask htask,common::msg::BodyTask btask);
 void yawControl(float yawTarget,common::msg::BodyTask btask,common::msg::ImuData imuData);
@@ -48,24 +61,26 @@ void yawControl(float yawTarget,common::msg::BodyTask btask,common::msg::ImuData
 
 cv::Vec3f ballInView;   // col,row,radius
 bool ballFoundFlag;
+float ballDistance;
 int ballNotFoundElapse=0;
 
 cv::RotatedRect goalInView;
 bool goalFoundFlag;
+float goalDistance;
 
 cv::RotatedRect robotInView;
 bool robotFoundFlag;
 int robotFoundTime=0;
 
-//const int timer=400;
+// const int timer=400;
 int secondFlag=0;
-//bool bodyToGoal=true;
+// bool bodyToGoal=true;
 bool ballInControl=true;
 float yawTarget=0;
     
 int imgRow=0,imgCol=0;
 
-pid_type horiFollow,vertFollow,bodyFollow;
+pid_type bodyFollow;
 
 //********************************************************************************************************************************//
 // user define end
@@ -183,8 +198,10 @@ int main(int argc, char ** argv)
             // 每次开球时都会进入这里
             // 例如：RCLCPP_INFO(playerNode->get_logger(), "%d", gameData.blue_score);
 
-            ballInView={0,0,0};
+            ballInView={0,0,30};
+            ballDistance=435;
             goalInView={cv::Point2f(0,0),cv::Size2f(0,0),0};
+            goalDistance=2450;
 
             if((!imgRow||!imgCol)&&!image.empty())
             {
@@ -194,22 +211,8 @@ int main(int argc, char ** argv)
                 RCLCPP_INFO(playerNode->get_logger(),"rows=%d,cols=%d",imgRow,imgCol);
             }
 
-            horiFollow.Kp=0.01;
-            horiFollow.Ki=0.05;
-            horiFollow.Kd=0;
-            horiFollow.sumClamp=100;
-            horiFollow.outClamp=100;
-            horiFollow.isEnabled=true;
-
-            vertFollow.Kp=0.016;
-            vertFollow.Ki=0.05;
-            vertFollow.Kd=0;
-            vertFollow.sumClamp=100;
-            vertFollow.outClamp=100;
-            vertFollow.isEnabled=true;
-
             bodyFollow.Kp=0.1;
-            bodyFollow.Ki=0.05;
+            bodyFollow.Ki=0.005;
             bodyFollow.Kd=0;
             bodyFollow.sumClamp=100;
             bodyFollow.outClamp=100;
@@ -245,11 +248,11 @@ int main(int argc, char ** argv)
         // 假如红色的进球方向是0度，则蓝色的进球方向就是180度
         // 比赛时使用什么颜色的机器人是现场决定的，所以对于两种颜色的机器人，都需要考虑如何
         // 如果使用了上面的转换方法，则不需要再关心不同颜色机器人的方向问题
-        if (myColor == COLOR_RED) 
+        if (myColor == COLOR_RED)
         {
             // 使用的红色的机器人
-        } 
-        else if (myColor == COLOR_BLUE) 
+        }
+        else if (myColor == COLOR_BLUE)
         {
             // 使用的蓝色的机器人
         }
@@ -258,11 +261,42 @@ int main(int argc, char ** argv)
         // 机器人出界后，会将出界的机器人放回己方半场靠近中线的约0.5米处，此时该机器人会有30s的惩罚
         // 由于有两台机器人，每一天机器人重生的位置都是在己方固定的某一边，并不是从哪边出去就从哪边重生，
         // 具体哪一台从哪边重生，请自行运行仿真查看
-        if (myId == 1) 
+        if (myId == 1)
         {
 
-        } 
-        else if (myId == 2) 
+            // for cv test
+            // btask.type=btask.TASK_WALK;
+            if(ballFoundFlag||ballNotFoundElapse<3*10)
+            {
+                if(!ballFoundFlag)
+                    ballNotFoundElapse++;
+                else
+                    ballNotFoundElapse=0;
+                    
+                
+                
+                headFollow(htask,cv::Point2f(ballInView[0],ballInView[1]),ballDistance);
+
+
+
+                // bodyFollow.target=headAngle.yaw;
+                // while(bodyFollow.target>=180)bodyFollow.target-=360;
+                // while(bodyFollow.target<-180)bodyFollow.target+=360;
+                bodyFollow.target=0;
+                pidCal(bodyFollow,headAngle.yaw);
+                btask.turn=bodyFollow.output;
+
+                RCLCPP_INFO(playerNode->get_logger(),"--radius=%f,distance=%f",ballInView[2],ballDistance);
+                // RCLCPP_INFO(playerNode->get_logger(),"%lf",btask.turn);
+
+
+                // btask.step=-1;
+
+            }
+
+
+        }
+        else if (myId == 2)
         {
             // 2号机器人
         }
@@ -301,7 +335,11 @@ void pidCal(pid_type& obj,float val)
         obj.sumError=obj.sumError>obj.sumClamp?obj.sumClamp:obj.sumError;
         obj.sumError=obj.sumError<-obj.sumClamp?-obj.sumClamp:obj.sumError;
 
-        obj.output=obj.Kp*(obj.curError+obj.Ki*obj.sumError+obj.Kd*(obj.curError-obj.lastError));
+        obj.output=
+            obj.Kp*obj.curError+
+            obj.Ki*obj.sumError+
+            obj.Kd*(obj.curError-obj.lastError);
+
         obj.output=obj.output>obj.outClamp?obj.outClamp:obj.output;
         obj.output=obj.output<-obj.outClamp?-obj.outClamp:obj.output;
     }
@@ -309,7 +347,103 @@ void pidCal(pid_type& obj,float val)
     {
         obj.output=0;
     }
+}
+
+float mafUpdate(float val,float* mafBuffer,int size=5)
+{
+    // last element in mafBuffer should be the most recent
+    for(int i=1;i<size;i++)
+        mafBuffer[i-1]=mafBuffer[i];
+    mafBuffer[size-1]=val;
+
+    static float mafVal;
+    mafVal=0;
+    for(int i=0;i<size;i++)
+        mafVal+=mafBuffer[i]*mafWeight[i];
+
+    return mafVal;
+}
+
+void headFollow(common::msg::HeadTask& htask,cv::Point2f target,float distance)
+{
+    static pid_type hFollow,vFollow;
+    static bool initFlag=true;
+
+    if(initFlag)
+    {
+        initFlag=false;
+
+        hFollow.Kp=0.16;
+        hFollow.Ki=0.002;
+        hFollow.Kd=0.04;
+        hFollow.sumClamp=1000;
+        hFollow.outClamp=100;
+        hFollow.isEnabled=true;
+
+        vFollow.Kp=0.12;
+        vFollow.Ki=0.002;
+        vFollow.Kd=0.08;
+        vFollow.sumClamp=1000;
+        vFollow.outClamp=100;
+        vFollow.isEnabled=true;
+
+    }
+
+    if(target.x>0)
+    {
+        hFollow.target=imgCol/2;
+
+
+
+        hFollow.lastError=hFollow.curError;
+        hFollow.curError=target.x-hFollow.target;
+
+        hFollow.sumError+=hFollow.curError;
+        hFollow.sumError=hFollow.sumError>hFollow.sumClamp?hFollow.sumClamp:hFollow.sumError;
+        hFollow.sumError=hFollow.sumError<-hFollow.sumClamp?-hFollow.sumClamp:hFollow.sumError;
+
+        hFollow.output=
+            hFollow.Kp*SGN(hFollow.curError)*cv::fastAtan2(fabs(hFollow.curError),distance)+
+            hFollow.Ki*hFollow.sumError+
+            hFollow.Kd*(hFollow.curError-hFollow.lastError);
+
+        hFollow.output=hFollow.output>hFollow.outClamp?hFollow.outClamp:hFollow.output;
+        hFollow.output=hFollow.output<-hFollow.outClamp?-hFollow.outClamp:hFollow.output;
+
+
+
+        htask.yaw-=hFollow.output;
+        // htask.yaw=htask.yaw<0?htask.yaw+360:htask.yaw;
+        // htask.yaw=htask.yaw>360?htask.yaw-360:htask.yaw;
+    }
     
+    if(target.y>0)
+    {
+        vFollow.target=imgRow/2;
+
+
+
+        vFollow.lastError=vFollow.curError;
+        vFollow.curError=target.y-vFollow.target;
+
+        vFollow.sumError+=vFollow.curError;
+        vFollow.sumError=vFollow.sumError>vFollow.sumClamp?vFollow.sumClamp:vFollow.sumError;
+        vFollow.sumError=vFollow.sumError<-vFollow.sumClamp?-vFollow.sumClamp:vFollow.sumError;
+
+        vFollow.output=
+            vFollow.Kp*SGN(vFollow.curError)*cv::fastAtan2(fabs(vFollow.curError),distance)+
+            vFollow.Ki*vFollow.sumError+
+            vFollow.Kd*(vFollow.curError-vFollow.lastError);
+
+        vFollow.output=vFollow.output>vFollow.outClamp?vFollow.outClamp:vFollow.output;
+        vFollow.output=vFollow.output<-vFollow.outClamp?-vFollow.outClamp:vFollow.output;
+
+
+
+        htask.pitch+=vFollow.output;
+        htask.pitch=htask.pitch<0?0:htask.pitch;
+        htask.pitch=htask.pitch>90?90:htask.pitch;
+    }
 
 }
 
@@ -325,7 +459,18 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
 
     cv::cvtColor(image,grayImg,cv::COLOR_BGR2GRAY);
+    for(int r=0;r<imgRow;r++)
+    {
+        for(int c=0;c<imgCol;c++)
+        {
+            if(grayImg.at<uchar>(r,c)>45&&grayImg.at<uchar>(r,c)<210)
+                grayImg.at<uchar>(r,c)=(0.02)*(grayImg.at<uchar>(r,c)-127)+127;
+            if(grayImg.at<uchar>(r,c)>=210)
+                grayImg.at<uchar>(r,c)=0;
+        }
+    }
     cv::medianBlur(grayImg,grayImg,3);
+    cv::GaussianBlur(grayImg,grayImg,cv::Size(3,3),0,0);
 
     cv::cvtColor(image,hsvImg,cv::COLOR_BGR2HSV);
     // cv::split(hsvImg,hsvSplit);
@@ -361,9 +506,9 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
     
     // resultimg select
-    // cv::cvtColor(grayimg,resultImg,cv::COLOR_GRAY2BGR);
+    cv::cvtColor(grayImg,resultImg,cv::COLOR_GRAY2BGR);
     // cv::cvtColor(filteredImg1,resultImg,cv::COLOR_GRAY2BGR);
-    cv::cvtColor(filteredImg2,resultImg,cv::COLOR_GRAY2BGR);
+    // cv::cvtColor(filteredImg2,resultImg,cv::COLOR_GRAY2BGR);
     // resultImg=image;
 
 
@@ -371,33 +516,27 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
 
     // ball detect
-    cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1.5,128,100,25,4,72);
+    static int minRadius=1,maxRadius=64;
+    static float radiusMafBuffer[5]={0};
+
+    cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1,128,64,20,minRadius,maxRadius);
+    // cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1.5,128,100,25,4,72);
 
     if(circleSeq.empty())
     {
         // RCLCPP_INFO(playerNode->get_logger(),"--ball not found");
-
-        // ballInView[2]=-1;
         ballFoundFlag=false;
-    }
-    else if(circleSeq.size()==1)
-    {
-        // RCLCPP_INFO(playerNode->get_logger(),"--ball found");
-
-        ballInView=circleSeq[0];
-        cv::circle(resultImg,cv::Point(ballInView[0],ballInView[1]),ballInView[2],cv::Scalar(255,0,0),3);
-        ballFoundFlag=true;
     }
     else
     {
-        // RCLCPP_INFO(playerNode->get_logger(),"--more than one ball found");
+        // RCLCPP_INFO(playerNode->get_logger(),"--one or more ball found");
 
         static float maxWhiteRatio;
         maxWhiteRatio=0.5;
 
         for(auto item:circleSeq)
         {
-            cv::circle(resultImg,cv::Point(item[0],item[1]),item[2],cv::Scalar(255,0,0));
+            cv::circle(resultImg,cv::Point2f(item[0],item[1]),item[2],cv::Scalar(255,0,0));
             // RCLCPP_INFO(playerNode->get_logger(),"(%f,%f),%f",item[0],item[1],item[2]);
 
             // white ratio cal
@@ -411,7 +550,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
                     if((pow(item[1]-r,2)+pow(item[0]-c,2))<=pow(item[2],2))
                     {
                         ++pixelCount;
-                        if(filteredImg1.at<uchar>(r,c))
+                        if(filteredImg1.at<uchar>(r,c)>2)
                             ++whiteCount;
                     }
                     
@@ -425,8 +564,6 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
             }
 
         }
-
-        
         // RCLCPP_INFO(playerNode->get_logger(),"%lf,(%f,%f)",maxWhiteRatio,ballInView[0],ballInView[1]);
 
         if(maxWhiteRatio<=0.51)
@@ -435,12 +572,24 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
         }
         else
         {
-            cv::circle(resultImg,cv::Point(ballInView[0],ballInView[1]),ballInView[2],cv::Scalar(255,0,0),3);
             ballFoundFlag=true;
         }
         
-            
-        
+    }
+
+    ballInView[2]=mafUpdate(ballInView[2],radiusMafBuffer);
+
+    if(ballFoundFlag)
+    {
+        cv::circle(resultImg,cv::Point2f(ballInView[0],ballInView[1]),ballInView[2],cv::Scalar(255,0,0),3);
+        ballDistance=30*435/ballInView[2];
+        minRadius=ballInView[2]*0.75;
+        maxRadius=ballInView[2]*1.33;
+    }
+    else
+    {
+        minRadius=1;
+        maxRadius=64;
     }
     
 
@@ -513,7 +662,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
         {
             for(int c=goalInView.boundingRect().x;c<=goalInView.boundingRect().x+goalInView.boundingRect().width;c++)
             {
-                if(filteredImg1.at<uchar>(r,c))
+                if(filteredImg1.at<uchar>(r,c)>10)
                     ++whiteCount;
             }
         }
@@ -546,6 +695,7 @@ return resultImg;
 }
 
 //********************************************************************************************************************************//
+
 //跟球移动
 void followBall(common::msg::HeadAngles headAngle,common::msg::BodyTask btask,rclcpp::Node::SharedPtr playerNode)
 {
@@ -641,5 +791,6 @@ void findGoal(common::msg::HeadAngles headAngle,common::msg::HeadTask htask,comm
     yawTarget=imuData.yaw+headAngle.yaw;
     headFollowTarget=ball;
 }
+
 //********************************************************************************************************************************//
 // function implementation end
