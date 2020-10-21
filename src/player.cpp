@@ -49,14 +49,14 @@ const int RID_DEFENSE_TIME=50;
 cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode);
 
 // htask:used to log control head ; target:center point of tracking object ; distance:estimated distance
-void headFollow(common::msg::HeadTask& htask,cv::Point2f target,float distance);
+// target switched by:headFollowTarget.
+void headFollow(common::msg::HeadTask& htask,common::msg::HeadAngles& headAngle);
 
 void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode);
 void findBall(common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode);
 void yawControl(float& yawTarget,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode);
 void passRobot(rclcpp::Node::SharedPtr& playerNode);
 void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode);
-
 
 //********************************************************************************************************************************//
 
@@ -274,7 +274,7 @@ int main(int argc, char ** argv)
                 // RCLCPP_INFO(playerNode->get_logger(),"btask.step=%f",btask.step);
                 // 2号机器人
             }
-                // 使用的红色的机器人
+            // 使用的红色的机器人
         }
         else if (myColor == COLOR_BLUE)
         {
@@ -285,7 +285,45 @@ int main(int argc, char ** argv)
         // 机器人出界后，会将出界的机器人放回己方半场靠近中线的约0.5米处，此时该机器人会有30s的惩罚
         // 由于有两台机器人，每一天机器人重生的位置都是在己方固定的某一边，并不是从哪边出去就从哪边重生，
         // 具体哪一台从哪边重生，请自行运行仿真查看
+        if (myId == 1)
+        {
 
+            // for cv test
+            // btask.type=btask.TASK_WALK;
+            if(ballFoundFlag||ballNotFoundElapse<3*10)
+            {
+                if(!ballFoundFlag)
+                    ballNotFoundElapse++;
+                else
+                    ballNotFoundElapse=0;
+                    
+                
+                
+                headFollow(htask,headAngle);
+
+
+
+                // bodyFollow.target=headAngle.yaw;
+                // while(bodyFollow.target>=180)bodyFollow.target-=360;
+                // while(bodyFollow.target<-180)bodyFollow.target+=360;
+                bodyFollow.target=0;
+                pidCal(bodyFollow,headAngle.yaw);
+                btask.turn=bodyFollow.output;
+
+                // RCLCPP_INFO(playerNode->get_logger(),"--radius=%f,distance=%f",ballInView[2],ballDistance);
+                // RCLCPP_INFO(playerNode->get_logger(),"%lf",btask.turn);
+
+
+                // btask.step=-1;
+
+            }
+
+
+        }
+        else if (myId == 2)
+        {
+            // 2号机器人
+        }
 
         // 郑重声明：以上说明仅供参考，实际情况以实际为准
         // ----------------- 可以修改的部分 end--------------------
@@ -350,10 +388,12 @@ float mafUpdate(float val,float* mafBuffer,int size=5)
     return mafVal;
 }
 
-void headFollow(common::msg::HeadTask& htask,cv::Point2f target,float distance)
+void headFollow(common::msg::HeadTask& htask,common::msg::HeadAngles& headAngle)
 {
     static pid_type hFollow,vFollow;
     static bool initFlag=true;
+    static cv::Point2f target;
+    static float distance;
 
     if(initFlag)
     {
@@ -374,6 +414,18 @@ void headFollow(common::msg::HeadTask& htask,cv::Point2f target,float distance)
         vFollow.isEnabled=true;
 
     }
+
+    if(headFollowTarget==ball)
+    {
+        target=cv::Point2f(ballInView[0],ballInView[1]);
+        distance=ballDistance;
+    }
+    else
+    {
+        target=goalInView.center;
+        distance=goalDistance;
+    }
+    
 
     if(target.x>0)
     {
@@ -428,7 +480,9 @@ void headFollow(common::msg::HeadTask& htask,cv::Point2f target,float distance)
 
         htask.pitch+=vFollow.output;
         htask.pitch=htask.pitch<0?0:htask.pitch;
-        htask.pitch=htask.pitch>90?90:htask.pitch;
+        static float hPitchLim;
+        hPitchLim=67.5+22.5*cos(headAngle.yaw*M_PI/90);
+        htask.pitch=htask.pitch>hPitchLim?hPitchLim:htask.pitch;
     }
 
 }
@@ -449,10 +503,10 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
     {
         for(int c=0;c<imgCol;c++)
         {
+            if(grayImg.at<uchar>(r,c)>=225)
+                grayImg.at<uchar>(r,c)=0;
             if(grayImg.at<uchar>(r,c)>45&&grayImg.at<uchar>(r,c)<210)
                 grayImg.at<uchar>(r,c)=(0.02)*(grayImg.at<uchar>(r,c)-127)+127;
-            if(grayImg.at<uchar>(r,c)>=210)
-                grayImg.at<uchar>(r,c)=0;
         }
     }
     cv::medianBlur(grayImg,grayImg,3);
@@ -492,8 +546,8 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
     
     // resultimg select
-    cv::cvtColor(grayImg,resultImg,cv::COLOR_GRAY2BGR);
-    // cv::cvtColor(filteredImg1,resultImg,cv::COLOR_GRAY2BGR);
+    // cv::cvtColor(grayImg,resultImg,cv::COLOR_GRAY2BGR);
+    cv::cvtColor(filteredImg1,resultImg,cv::COLOR_GRAY2BGR);
     // cv::cvtColor(filteredImg2,resultImg,cv::COLOR_GRAY2BGR);
     // resultImg=image;
 
@@ -503,6 +557,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
     // ball detect
     static int minRadius=1,maxRadius=64;
+    static cv::Rect possBallRegion={0,0,511,511};
     static float radiusMafBuffer[5]={0};
 
     cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1,128,64,20,minRadius,maxRadius);
@@ -528,6 +583,9 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
             // white ratio cal
             static int whiteCount,pixelCount;
             whiteCount=pixelCount=0;
+
+            if(!possBallRegion.contains(cv::Point(item[0],item[1])))
+                continue;
 
             for(int r=item[1]-item[2];r<=item[1]+item[2];r++)
             {
@@ -568,14 +626,25 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
     if(ballFoundFlag)
     {
         cv::circle(resultImg,cv::Point2f(ballInView[0],ballInView[1]),ballInView[2],cv::Scalar(255,0,0),3);
+
         ballDistance=30*435/ballInView[2];
+
         minRadius=ballInView[2]*0.75;
         maxRadius=ballInView[2]*1.33;
+
+        static float mult=5;
+        mult=3+(0.02)*sqrt(pow(ballInView[0]-imgCol/2,2)+pow(ballInView[1]-imgRow/2,2));
+        possBallRegion=cv::Rect(ballInView[0]-ballInView[2]*mult,ballInView[1]-ballInView[2]*mult,ballInView[2]*2*mult,ballInView[2]*2*mult);
+
+        RCLCPP_INFO(playerNode->get_logger(),"%f",mult);
+        cv::rectangle(resultImg,possBallRegion,cv::Scalar(255,0,192),2);
     }
     else
     {
         minRadius=1;
         maxRadius=64;
+
+        possBallRegion=cv::Rect(0,0,imgCol,imgRow);
     }
     
 
@@ -591,7 +660,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
     for(size_t i=0; i<frameContours.size();i++)
     {
-        cv::approxPolyDP(frameContours[i],frameContoursPloy[i],5,false);
+        cv::approxPolyDP(frameContours[i],frameContoursPloy[i],20,true);
         // for(auto item:frameContoursPloy[i])
         // {
         //     cv::circle(resultImg,item,1,cv::Scalar(0,255,0),1);
@@ -608,82 +677,104 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
         goalFoundFlag=false;
     }
-    else if(frameRectPoly.size()==1)
-    {
-        // RCLCPP_INFO(playerNode->get_logger(),"--goal found");
-
-        goalInView=frameRectPoly[0];
-
-        cv::circle(resultImg,goalInView.center,3,cv::Scalar(0,255,0),3);
-
-        static cv::Point2f vertices[4];
-        goalInView.points(vertices);
-        for (int i=0;i<4;i++)
-            cv::line(resultImg,vertices[i],vertices[(i+1)%4],cv::Scalar(0,255,0),3);
-
-        goalFoundFlag=true;
-    }
     else
     {
         // RCLCPP_INFO(playerNode->get_logger(),"--more than one goal found:");
 
+
+        
+        for(int i=0;i<frameContoursPloy.size();i++)
+            for(int j=0;j<frameContoursPloy[i].size();j++)
+                cv::line(resultImg,frameContoursPloy[i][j],frameContoursPloy[i][(j+1)%frameContoursPloy[i].size()],cv::Scalar(0,255,0),1);
+
+
+
         // find biggest area
-        static int maxArea;
-        maxArea=128;
-        for(auto item:frameRectPoly)
-        {
-            if(item.size.area()>maxArea)
-            {
-                maxArea=item.size.area();
-                goalInView=item;
-            }
-        }
+        // static int maxArea;
+        // maxArea=12800;
+        // for(auto item:frameRectPoly)
+        // {
+        //     if(item.size.area()>maxArea)
+        //     {
+        //         maxArea=item.size.area();
+        //         goalInView=item;
+        //     }
+        // }
 
         // white ratio cal
-        static int whiteCount,pixelCount;
-        whiteCount=0;
-        pixelCount=goalInView.size.area();
+        static float maxWhiteRatio;
+        maxWhiteRatio=0.1;
 
-        for(int r=goalInView.boundingRect().y;r<=goalInView.boundingRect().y+goalInView.boundingRect().height;r++)
+        for(auto item:frameRectPoly)
         {
-            for(int c=goalInView.boundingRect().x;c<=goalInView.boundingRect().x+goalInView.boundingRect().width;c++)
+            static int whiteCount,pixelCount;
+            whiteCount=0;
+
+            if(item.size.area()>=9200)
+                pixelCount=item.size.area();
+            else
+                continue;
+            
+            for(int r=item.boundingRect().y;r<=item.boundingRect().y+item.boundingRect().height;r++)
             {
-                if(filteredImg1.at<uchar>(r,c)>10)
-                    ++whiteCount;
+                for(int c=item.boundingRect().x;c<=item.boundingRect().x+item.boundingRect().width;c++)
+                {
+                    if(filteredImg1.at<uchar>(r,c)>10)
+                        ++whiteCount;
+                }
             }
+            
+            if(whiteCount/(double)pixelCount>maxWhiteRatio)
+            {
+                maxWhiteRatio=whiteCount/(double)pixelCount;
+                goalInView=item;
+            }
+
         }
 
-        // RCLCPP_INFO(playerNode->get_logger(),"%lf,(%d,%d)",whiteCount/(double)pixelCount,goalInView.center.x,goalInView.center.y);
 
-        if(whiteCount/(double)pixelCount>0.1)
+        RCLCPP_INFO(playerNode->get_logger(),"%f,%f",maxWhiteRatio,goalInView.size.area());
+
+        if(maxWhiteRatio<=0.11||maxWhiteRatio>0.4)
         {
-            goalFoundFlag=true;
-
-            cv::circle(resultImg,goalInView.center,3,cv::Scalar(0,255,0),3);
-            
-            static cv::Point2f vertices[4];
-            goalInView.points(vertices);
-            for (int i=0;i<4;i++)
-                cv::line(resultImg,vertices[i],vertices[(i+1)%4],cv::Scalar(0,255,0),3);
-
+            goalFoundFlag=false;
         }
         else
         {
-            goalFoundFlag=false;
-            
+            goalFoundFlag=true;
         }
         
 
     }
 
-return resultImg;
+    if(goalFoundFlag)
+    {
+        cv::circle(resultImg,goalInView.center,3,cv::Scalar(0,255,0),3);
+            
+        static cv::Point2f vertices[4];
+        goalInView.points(vertices);
+        for(int i=0;i<4;i++)
+            cv::line(resultImg,vertices[i],vertices[(i+1)%4],cv::Scalar(0,255,0),3);
+
+        // ballDistance=30*435/ballInView[2];
+        // minRadius=ballInView[2]*0.75;
+        // maxRadius=ballInView[2]*1.33;
+    }
+    else
+    {
+        // minRadius=1;
+        // maxRadius=64;
+    }
+
+
+    return resultImg;
 
 }
 
 //********************************************************************************************************************************//
 
 //跟球移动
-void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode)
+void followBall(common::msg::HeadAngles headAngle,common::msg::BodyTask btask,rclcpp::Node::SharedPtr playerNode)
 {
     if(abs(headAngle.yaw)>FIND_HEADANGLE_YAW_MAX)//保持对球控制初始化
         ballInControl=false;
@@ -715,11 +806,10 @@ void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,
 }
 
 //摆头找球
-void findBall(common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode)
+void findBall(common::msg::HeadTask htask,common::msg::BodyTask btask)
 {
     if(!ballFoundFlag)
     {
-        RCLCPP_INFO(playerNode->get_logger(),"I am finding the ball!");
         htask.yaw=10;
         htask.pitch=20*sin(secondFlag*0.1)+40;
     }
@@ -731,12 +821,12 @@ void findBall(common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::
 }
 
 //稳定方向
-void yawControl(float& yawTarget,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
+void yawControl(float yawTarget,common::msg::BodyTask btask,common::msg::ImuData imuData)
 {
     if(abs(imuData.yaw-yawTarget)>10)
     {
         //👇写在main里面调试一下
-        RCLCPP_INFO(playerNode->get_logger(),"imuData.yaw=%f,yawTarget=%f",imuData.yaw,yawTarget);
+        //RCLCPP_INFO(playerNode->get_logger(),"imuData.yaw=%f",imuData.yaw);
         btask.turn=5*SGN(imuData.yaw-yawTarget);
     }
     else
@@ -747,11 +837,10 @@ void yawControl(float& yawTarget,common::msg::BodyTask& btask,common::msg::ImuDa
 }
 
 //带球过人
-void passRobot(rclcpp::Node::SharedPtr& playerNode)
+void passRobot()
 {
     if(robotFoundFlag&&(robotFoundTime>RID_DEFENSE_TIME||robotFoundTime==0))
     {
-        RCLCPP_INFO(playerNode->get_logger(),"I meet anti robot");
         yawTarget+=SGN(robotInView.center.x-imgCol/2)*30;
         robotFoundTime=1;//main中说明robotFoundTime++
         //可能需要更改，可能因为碰到对方机器人疯狂旋转
@@ -764,11 +853,10 @@ void passRobot(rclcpp::Node::SharedPtr& playerNode)
 }
 
 //寻找球门
-void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
+void findGoal(common::msg::HeadAngles headAngle,common::msg::HeadTask htask,common::msg::ImuData imuData)
 {
     if(secondFlag%FIND_GOAL_INTERVAL==0&&robotFoundTime>RID_DEFENSE_TIME)
     {
-        RCLCPP_INFO(playerNode->get_logger(),"I am finding the goal!");
         headFollowTarget=goal;
         htask.pitch=0;
         htask.yaw=-10*SGN(imuData.yaw);
