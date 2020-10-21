@@ -285,45 +285,6 @@ int main(int argc, char ** argv)
         // 机器人出界后，会将出界的机器人放回己方半场靠近中线的约0.5米处，此时该机器人会有30s的惩罚
         // 由于有两台机器人，每一天机器人重生的位置都是在己方固定的某一边，并不是从哪边出去就从哪边重生，
         // 具体哪一台从哪边重生，请自行运行仿真查看
-        if (myId == 1)
-        {
-
-            // for cv test
-            // btask.type=btask.TASK_WALK;
-            if(ballFoundFlag||ballNotFoundElapse<3*10)
-            {
-                if(!ballFoundFlag)
-                    ballNotFoundElapse++;
-                else
-                    ballNotFoundElapse=0;
-                    
-                
-                
-                headFollow(htask,headAngle);
-
-
-
-                // bodyFollow.target=headAngle.yaw;
-                // while(bodyFollow.target>=180)bodyFollow.target-=360;
-                // while(bodyFollow.target<-180)bodyFollow.target+=360;
-                bodyFollow.target=0;
-                pidCal(bodyFollow,headAngle.yaw);
-                btask.turn=bodyFollow.output;
-
-                // RCLCPP_INFO(playerNode->get_logger(),"--radius=%f,distance=%f",ballInView[2],ballDistance);
-                // RCLCPP_INFO(playerNode->get_logger(),"%lf",btask.turn);
-
-
-                // btask.step=-1;
-
-            }
-
-
-        }
-        else if (myId == 2)
-        {
-            // 2号机器人
-        }
 
         // 郑重声明：以上说明仅供参考，实际情况以实际为准
         // ----------------- 可以修改的部分 end--------------------
@@ -774,7 +735,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 //********************************************************************************************************************************//
 
 //跟球移动
-void followBall(common::msg::HeadAngles headAngle,common::msg::BodyTask btask,rclcpp::Node::SharedPtr playerNode)
+void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode)
 {
     if(abs(headAngle.yaw)>FIND_HEADANGLE_YAW_MAX)//保持对球控制初始化
         ballInControl=false;
@@ -806,10 +767,11 @@ void followBall(common::msg::HeadAngles headAngle,common::msg::BodyTask btask,rc
 }
 
 //摆头找球
-void findBall(common::msg::HeadTask htask,common::msg::BodyTask btask)
+void findBall(common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode)
 {
     if(!ballFoundFlag)
     {
+        RCLCPP_INFO(playerNode->get_logger(),"I am finding the ball!");
         htask.yaw=10;
         htask.pitch=20*sin(secondFlag*0.1)+40;
     }
@@ -821,12 +783,12 @@ void findBall(common::msg::HeadTask htask,common::msg::BodyTask btask)
 }
 
 //稳定方向
-void yawControl(float yawTarget,common::msg::BodyTask btask,common::msg::ImuData imuData)
+void yawControl(float& yawTarget,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
 {
     if(abs(imuData.yaw-yawTarget)>10)
     {
         //👇写在main里面调试一下
-        //RCLCPP_INFO(playerNode->get_logger(),"imuData.yaw=%f",imuData.yaw);
+        RCLCPP_INFO(playerNode->get_logger(),"imuData.yaw=%f,yawTarget=%f",imuData.yaw,yawTarget);
         btask.turn=5*SGN(imuData.yaw-yawTarget);
     }
     else
@@ -837,10 +799,11 @@ void yawControl(float yawTarget,common::msg::BodyTask btask,common::msg::ImuData
 }
 
 //带球过人
-void passRobot()
+void passRobot(rclcpp::Node::SharedPtr& playerNode)
 {
     if(robotFoundFlag&&(robotFoundTime>RID_DEFENSE_TIME||robotFoundTime==0))
     {
+        RCLCPP_INFO(playerNode->get_logger(),"I meet anti robot");
         yawTarget+=SGN(robotInView.center.x-imgCol/2)*30;
         robotFoundTime=1;//main中说明robotFoundTime++
         //可能需要更改，可能因为碰到对方机器人疯狂旋转
@@ -853,10 +816,11 @@ void passRobot()
 }
 
 //寻找球门
-void findGoal(common::msg::HeadAngles headAngle,common::msg::HeadTask htask,common::msg::ImuData imuData)
+void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
 {
     if(secondFlag%FIND_GOAL_INTERVAL==0&&robotFoundTime>RID_DEFENSE_TIME)
     {
+        RCLCPP_INFO(playerNode->get_logger(),"I am finding the goal!");
         headFollowTarget=goal;
         htask.pitch=0;
         htask.yaw=-10*SGN(imuData.yaw);
