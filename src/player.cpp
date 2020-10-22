@@ -60,19 +60,16 @@ void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,co
 
 //********************************************************************************************************************************//
 
-// cv::Mat resultImg;
-
 cv::Vec3f ballInView;   // col,row,radius
 bool ballFoundFlag;
 float ballDistance;
-int ballNotFoundElapse=0;
 
 cv::RotatedRect goalInView;
 bool goalFoundFlag;
 float goalDistance;
 
 cv::RotatedRect robotInView;
-bool robotFoundFlag=false;
+bool robotFoundFlag;
 int robotFoundTime=0;
 
 int secondFlag=0;
@@ -80,6 +77,7 @@ bool ballInControl=true;
 float yawTarget=0;
     
 int imgRow=0,imgCol=0;
+int myColorInd;
 
 pid_type bodyFollow;
 
@@ -192,10 +190,12 @@ int main(int argc, char ** argv)
             // 每次开球时都会进入这里
             // 例如：RCLCPP_INFO(playerNode->get_logger(), "%d", gameData.blue_score);
             // INII状态时，1号机器人位于己方这边的中圈上，2号机器人位于己方的禁区线上
-            initYaw = imuData.yaw; // 获取init状态时，机器人的朝向，此时的方向即为自己进攻的方向
+            initYaw=imuData.yaw; // 获取init状态时，机器人的朝向，此时的方向即为自己进攻的方向
             secondFlag=1;
             robotFoundTime=1;
             headFollowTarget=ball;
+
+            
 
             // 每次开球时都会进入这里
             // 例如：RCLCPP_INFO(playerNode->get_logger(), "%d", gameData.blue_score);
@@ -212,6 +212,8 @@ int main(int argc, char ** argv)
                 RCLCPP_INFO(playerNode->get_logger(),"%s--got image size:",argv[1]);
                 RCLCPP_INFO(playerNode->get_logger(),"rows=%d,cols=%d",imgRow,imgCol);
             }
+
+            myColorInd=myColor;
 
             bodyFollow.Kp=0.1;
             bodyFollow.Ki=0.005;
@@ -232,6 +234,7 @@ int main(int argc, char ** argv)
 
 
 
+
         if (!image.empty())
         {
             resImgPublisher->Publish(imageProcess(image,playerNode)); // 处理完的图像可以通过该方式发布出去，然后通过rqt中的image_view工具查看
@@ -244,7 +247,7 @@ int main(int argc, char ** argv)
         // 将机器人的当前朝向减去init时的朝向，即可得到机器人相对于初始位置的方向，
         // 这样可以保证自己不管是红色或者蓝色，其yaw都是在面朝对方球门时为0
         // 下面提供这种转换的方法，需要该转换的可以把注释符号去掉
-        imuData.yaw = imuData.yaw - initYaw; 
+        imuData.yaw=imuData.yaw-initYaw; 
         imuData.yaw=abs(imuData.yaw)<180?
                    imuData.yaw:
                    (imuData.yaw>0?imuData.yaw-360:imuData.yaw+360);
@@ -290,8 +293,14 @@ int main(int argc, char ** argv)
         }
         else if (myColor == COLOR_BLUE)
         {
+            
             // 使用的蓝色的机器人
         }
+
+
+
+        
+
 
         // 复赛每个组使用两台机器人，需要根据不同的机器人id制定策略的队伍，可以利用myId进行区分
         // 机器人出界后，会将出界的机器人放回己方半场靠近中线的约0.5米处，此时该机器人会有30s的惩罚
@@ -467,8 +476,10 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
     static cv::Mat grayImg,hsvImg,filteredImg1,filteredImg2,filteredImg3,resultImg;
     static std::vector<cv::Mat> hsvSplit;
     static std::vector<cv::Vec3f> circleSeq;
-    static std::vector<std::vector<cv::Point>> frameContours;
-    static std::vector<cv::Vec4i> frameHierachy;
+    static std::vector<std::vector<cv::Point>> frameContours,robotContours;
+    static std::vector<cv::Vec4i> frameHierachy,robotHierachy;
+    static bool trueBallFoundFlag;
+    static int ballNotFoundElapse=0;
 
 
     cv::cvtColor(image,grayImg,cv::COLOR_BGR2GRAY);
@@ -517,11 +528,24 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
     cv::medianBlur(filteredImg2,filteredImg2,5);
     cv::GaussianBlur(filteredImg2,filteredImg2,cv::Size(3,3),0,0);
 
+    // anti robot color
+    if(myColorInd==1)
+        cv::inRange(hsvImg,cv::Scalar(-5,160,200),cv::Scalar(5,255,255),filteredImg3);//blue->white
+    else if(myColorInd==2)
+        cv::inRange(hsvImg,cv::Scalar(115,160,200),cv::Scalar(125,255,255),filteredImg3);//red->white
+    else
+        RCLCPP_INFO(playerNode->get_logger(),"--Invalid robot color");
+    cv::medianBlur(filteredImg3,filteredImg3,3);
+    // cv::GaussianBlur(filteredImg3,filteredImg3,cv::Size(3,3),0,0);
+    // RCLCPP_INFO(playerNode->get_logger(),"----%d,%d,%d",hsvImg.at<cv::Vec3b>(0,0)[0],hsvImg.at<cv::Vec3b>(0,0)[1],hsvImg.at<cv::Vec3b>(0,0)[2]);
+
+
     
     // resultimg select
     // cv::cvtColor(grayImg,resultImg,cv::COLOR_GRAY2BGR);
-    cv::cvtColor(filteredImg1,resultImg,cv::COLOR_GRAY2BGR);
+    // cv::cvtColor(filteredImg1,resultImg,cv::COLOR_GRAY2BGR);
     // cv::cvtColor(filteredImg2,resultImg,cv::COLOR_GRAY2BGR);
+    cv::cvtColor(filteredImg3,resultImg,cv::COLOR_GRAY2BGR);
     // resultImg=image;
 
 
@@ -539,7 +563,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
     if(circleSeq.empty())
     {
         // RCLCPP_INFO(playerNode->get_logger(),"--ball not found");
-        ballFoundFlag=false;
+        trueBallFoundFlag=false;
     }
     else
     {
@@ -585,19 +609,21 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
         if(maxWhiteRatio<=0.51)
         {
-            ballFoundFlag=false;
+            trueBallFoundFlag=false;
         }
         else
         {
-            ballFoundFlag=true;
+            trueBallFoundFlag=true;
         }
         
     }
 
     ballInView[2]=mafUpdate(ballInView[2],radiusMafBuffer);
 
-    if(ballFoundFlag)
+    if(trueBallFoundFlag)
     {
+        ballNotFoundElapse=0;
+         
         cv::circle(resultImg,cv::Point2f(ballInView[0],ballInView[1]),ballInView[2],cv::Scalar(255,0,0),3);
 
         ballDistance=30*435/ballInView[2];
@@ -609,17 +635,21 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
         mult=3+(0.02)*sqrt(pow(ballInView[0]-imgCol/2,2)+pow(ballInView[1]-imgRow/2,2));
         possBallRegion=cv::Rect(ballInView[0]-ballInView[2]*mult,ballInView[1]-ballInView[2]*mult,ballInView[2]*2*mult,ballInView[2]*2*mult);
 
-        RCLCPP_INFO(playerNode->get_logger(),"%f",mult);
+        // RCLCPP_INFO(playerNode->get_logger(),"%f",mult);
         cv::rectangle(resultImg,possBallRegion,cv::Scalar(255,0,192),2);
     }
     else
     {
+        ballNotFoundElapse++;
+
         minRadius=1;
         maxRadius=64;
 
         possBallRegion=cv::Rect(0,0,imgCol,imgRow);
     }
     
+    ballFoundFlag=trueBallFoundFlag||ballNotFoundElapse<1*10;
+
 
 
 
@@ -633,13 +663,13 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
     for(size_t i=0; i<frameContours.size();i++)
     {
-        cv::approxPolyDP(frameContours[i],frameContoursPloy[i],20,true);
+        cv::approxPolyDP(frameContours[i],frameContoursPloy[i],15,true);
         // for(auto item:frameContoursPloy[i])
         // {
         //     cv::circle(resultImg,item,1,cv::Scalar(0,255,0),1);
         // }
         // RCLCPP_INFO(playerNode->get_logger(),"--polysize=%d",frameContoursPloy[i].size());
-        if(frameContoursPloy[i].size()<64)
+        if(frameContoursPloy[i].size()<16)
             frameRectPoly.push_back(cv::minAreaRect(frameContoursPloy[i]));
 
     }
@@ -662,18 +692,6 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
 
 
-        // find biggest area
-        // static int maxArea;
-        // maxArea=12800;
-        // for(auto item:frameRectPoly)
-        // {
-        //     if(item.size.area()>maxArea)
-        //     {
-        //         maxArea=item.size.area();
-        //         goalInView=item;
-        //     }
-        // }
-
         // white ratio cal
         static float maxWhiteRatio;
         maxWhiteRatio=0.1;
@@ -683,7 +701,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
             static int whiteCount,pixelCount;
             whiteCount=0;
 
-            if(item.size.area()>=9200)
+            if(item.size.area()>=9200&&item.size.aspectRatio()<3&&item.size.aspectRatio()>0.33)
                 pixelCount=item.size.area();
             else
                 continue;
@@ -706,7 +724,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
         }
 
 
-        RCLCPP_INFO(playerNode->get_logger(),"%f,%f",maxWhiteRatio,goalInView.size.area());
+        // RCLCPP_INFO(playerNode->get_logger(),"%f,%f",maxWhiteRatio,goalInView.size.area());
 
         if(maxWhiteRatio<=0.11||maxWhiteRatio>0.4)
         {
@@ -738,6 +756,63 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
         // minRadius=1;
         // maxRadius=64;
     }
+
+
+
+
+
+    // anti robot detect
+    cv::findContours(filteredImg3,robotContours,robotHierachy,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE,cv::Point(-1,-1));
+    // cv::drawContours(resultImg,robotContours,-1,cv::Scalar(0,255,255),1,8,robotHierachy);
+
+    if(robotContours.empty())
+    {
+        robotFoundFlag=false;
+    }
+    else
+    {
+
+        // find biggest area
+        static int maxArea;
+        static double tmpArea;
+        maxArea=64;
+        for(auto item:robotContours)
+        {
+            tmpArea=cv::contourArea(item);
+            if(tmpArea>maxArea)
+            {
+                maxArea=tmpArea;
+                robotInView=cv::minAreaRect(item);
+            }
+        }
+
+        if(maxArea==64)
+        {
+            robotFoundFlag=false;
+        }
+        else
+        {
+            robotFoundFlag=true;
+        }
+        
+    }
+
+    if(robotFoundFlag)
+    {
+        cv::circle(resultImg,robotInView.center,3,cv::Scalar(0,255,255),3);
+
+        static cv::Point2f vertices[4];
+        robotInView.points(vertices);
+        for(int i=0;i<4;i++)
+            cv::line(resultImg,vertices[i],vertices[(i+1)%4],cv::Scalar(0,255,255),3);
+
+    }
+    else
+    {
+        
+    }
+    
+
 
 
     return resultImg;
