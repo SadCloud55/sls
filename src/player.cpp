@@ -39,8 +39,8 @@ float mafUpdate(float val,float* mafBuffer,int size);
 
 #define SGN(x) ((x)>0?(1):((x)<0?(-1):(0)))
 const float FIND_HEADANGLE_YAW_MAX=15.0;
-const int FIND_GOAL_INTERVAL=400;
-const int RID_DEFENSE_TIME=50;
+const int FIND_GOAL_INTERVAL=300;
+const int RID_DEFENSE_TIME=100;
 
 //********************************************************************************************************************************//
 
@@ -56,7 +56,7 @@ void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,
 void findBall(common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode);
 void yawControl(float& yawTarget,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode);
 void passRobot(rclcpp::Node::SharedPtr& playerNode);
-void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode);
+void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode);
 
 //********************************************************************************************************************************//
 
@@ -66,7 +66,7 @@ float ballDistance;
 
 cv::RotatedRect goalInView;
 bool goalFoundFlag;
-float goalDistance;
+float goalDistance;//invalid
 
 cv::RotatedRect robotInView;
 bool robotFoundFlag;
@@ -74,6 +74,7 @@ int robotFoundTime=0;
 
 int secondFlag=0;
 bool ballInControl=true;
+bool knowGoalFlag=true;
 float yawTarget=0;
     
 int imgRow=0,imgCol=0;
@@ -194,6 +195,7 @@ int main(int argc, char ** argv)
             secondFlag=1;
             robotFoundTime=1;
             headFollowTarget=ball;
+            yawTarget=0;
 
             
 
@@ -229,8 +231,10 @@ int main(int argc, char ** argv)
         }
 
         if(gameData.state==gameData.STATE_PLAY)
+        {
             secondFlag++;
             robotFoundTime++;
+        }
 
 
 
@@ -266,7 +270,7 @@ int main(int argc, char ** argv)
         // 假如红色的进球方向是0度，则蓝色的进球方向就是180度
         // 比赛时使用什么颜色的机器人是现场决定的，所以对于两种颜色的机器人，都需要考虑如何
         // 如果使用了上面的转换方法，则不需要再关心不同颜色机器人的方向问题
-        if (myColor == COLOR_RED)
+        if(gameData.mode==gameData.MODE_NORM)
         {
             if (myId == 1)
             {
@@ -275,28 +279,29 @@ int main(int argc, char ** argv)
                 findBall(htask,btask,playerNode);
                 yawControl(yawTarget,btask,imuData,playerNode);
                 passRobot(playerNode);
-                findGoal(headAngle,htask,imuData,playerNode);
+                findGoal(headAngle,htask,btask,imuData,playerNode);
                 RCLCPP_INFO(playerNode->get_logger(),"btask.step=%f",btask.step);
-                RCLCPP_INFO(playerNode->get_logger(),"headAngle.yaw=%f",headAngle.yaw);
+                RCLCPP_INFO(playerNode->get_logger(),"yawTarget=%f",yawTarget);
+                RCLCPP_INFO(playerNode->get_logger(),"robotFoundTime=%d",robotFoundTime);
+                RCLCPP_INFO(playerNode->get_logger(),"secondFlag=%d",secondFlag);
             }
             else if (myId == 2)
             {
-                // followBall(headAngle,btask,playerNode);
+                // headFollow(htask,headAngle);
+                // //followBall(headAngle,btask,playerNode);
                 // findBall(htask,btask,playerNode);
-                // yawControl(yawTarget,btask,imuData,playerNode);
-                // passRobot(playerNode);
-                // findGoal(headAngle,htask,imuData,playerNode);
-                // RCLCPP_INFO(playerNode->get_logger(),"btask.step=%f",btask.step);
-                // 2号机器人
+                // RCLCPP_INFO(playerNode->get_logger(),"ball to player2:%f",ballDistance);
+                // //defense
             }
-            // 使用的红色的机器人
         }
-        else if (myColor == COLOR_BLUE)
+        else if (gameData.mode==gameData.MODE_KICK)
         {
-            
-            // 使用的蓝色的机器人
+            if (myId == 1)
+            {
+                btask.type=btask.TASK_ACT;
+                btask.actname="left_kick";
+            }
         }
-
 
 
         
@@ -829,7 +834,7 @@ void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,
     else
         ballInControl=true;
     
-    if(ballFoundFlag)
+    if(ballFoundFlag&&knowGoalFlag)
     {
         if(ballInControl)
         {
@@ -856,7 +861,7 @@ void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,
 //摆头找球
 void findBall(common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode)
 {
-    if(!ballFoundFlag)
+    if(!ballFoundFlag&&headFollowTarget==ball)
     {
         RCLCPP_INFO(playerNode->get_logger(),"I am finding the ball!");
         btask.step=0;
@@ -892,12 +897,16 @@ void yawControl(float& yawTarget,common::msg::BodyTask& btask,common::msg::ImuDa
 //带球过人
 void passRobot(rclcpp::Node::SharedPtr& playerNode)
 {
-    if(robotFoundFlag&&(robotFoundTime>RID_DEFENSE_TIME||robotFoundTime==0))
+    if(ballFoundFlag&&robotFoundFlag&&(robotFoundTime>RID_DEFENSE_TIME||robotFoundTime==0)&&secondFlag>100)
     {
         RCLCPP_INFO(playerNode->get_logger(),"I meet anti robot");
-        yawTarget+=SGN(robotInView.center.x-imgCol/2)*30;
+        yawTarget+=SGN(robotInView.center.x-imgCol/2)*45;
         robotFoundTime=1;//main中说明robotFoundTime++
         //可能需要更改，可能因为碰到对方机器人疯狂旋转
+    }
+    else if(robotFoundTime>3*RID_DEFENSE_TIME)
+    {
+        yawTarget=0;
     }
     else
     {
@@ -907,21 +916,31 @@ void passRobot(rclcpp::Node::SharedPtr& playerNode)
 }
 
 //寻找球门
-void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
+void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
 {
-    if(secondFlag%FIND_GOAL_INTERVAL==0&&robotFoundTime>RID_DEFENSE_TIME)
+    if(secondFlag%FIND_GOAL_INTERVAL==0)
+        knowGoalFlag=false;
+    
+    if(!knowGoalFlag&&robotFoundTime>RID_DEFENSE_TIME)
     {
         RCLCPP_INFO(playerNode->get_logger(),"I am finding the goal!");
         headFollowTarget=goal;
+        btask.turn=0;
+        btask.step=0;
+        btask.lateral=0;
         htask.pitch=0;
-        htask.yaw=-10*SGN(imuData.yaw);
+        htask.yaw+=-10*SGN(imuData.yaw);
+        if(goalFoundFlag)
+        {
+            yawTarget=imuData.yaw+headAngle.yaw;
+            headFollowTarget=ball;
+            knowGoalFlag=true;
+        }
     }
     else
     {
         return ;
     }
-    yawTarget=imuData.yaw+headAngle.yaw;
-    headFollowTarget=ball;
 }
 
 //********************************************************************************************************************************//
