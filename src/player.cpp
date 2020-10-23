@@ -49,7 +49,7 @@ float mafUpdate(float val,float* mafBuffer,int size);
 
 #define SGN(x) ((x)>0?(1):((x)<0?(-1):(0)))
 const float FIND_HEADANGLE_YAW_MAX=15.0;
-const int FIND_GOAL_INTERVAL=300;
+const int FIND_GOAL_INTERVAL=400;
 const int RID_DEFENSE_TIME=100;
 
 //********************************************************************************************************************************//
@@ -69,6 +69,7 @@ void passRobot(rclcpp::Node::SharedPtr& playerNode);
 void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode);
 void findRobot(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode);
 void followRobot(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode);
+void defenseFindBall(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode);
 
 //********************************************************************************************************************************//
 
@@ -216,6 +217,10 @@ int main(int argc, char ** argv)
             findingFlag=findingnone;
             yawTarget=0;
 
+            knowGoalFlag=true;
+            antiAttack=false;
+            defenseFlag=false;
+
             
 
             // 每次开球时都会进入这里
@@ -258,7 +263,7 @@ int main(int argc, char ** argv)
 
 
 
-            if(myId==2)
+            // if(myId==1)
                 if (!image.empty())
                     resImgPublisher->Publish(imageProcess(image,playerNode)); // 处理完的图像可以通过该方式发布出去，然后通过rqt中的image_view工具查看
 
@@ -323,9 +328,9 @@ int main(int argc, char ** argv)
                 {
                     if(!defenseFlag)
                     {
-                        // headFollow(htask,headAngle);
+                        headFollow(htask,headAngle);
                         // followBall(headAngle,btask,playerNode);
-                        findBall(htask,btask,playerNode);
+                        defenseFindBall(headAngle,htask,btask,playerNode);
                         RCLCPP_INFO(playerNode->get_logger(),"ball to player2:%f",ballDistance);
                         //defense
                     }
@@ -1135,10 +1140,32 @@ void followRobot(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask
     }
 }
 
-//
-void defense(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
+//防守机器人找球并拦截
+void defenseFindBall(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode)
 {
-    //defense
+    btask.type=btask.TASK_ACT;
+    headFollowTarget=none;
+
+    if(!defenseFlag)
+    {
+        htask.yaw=45*sin(secondFlag*0.005);
+        htask.pitch=30;
+    }
+
+    if(ballFoundFlag&&ballDistance<600)
+    {
+        headFollowTarget=ball;
+        btask.type=btask.TASK_WALK;
+        defenseFlag=true;
+        RCLCPP_INFO(playerNode->get_logger(),"They are Approaching!");
+        followBall(headAngle,btask,playerNode);
+    }
+    else
+    {
+        headFollowTarget=none;
+        defenseFlag=false;
+        return ;
+    }
 }
 
 //********************************************************************************************************************************//
