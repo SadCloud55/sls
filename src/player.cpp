@@ -258,7 +258,7 @@ int main(int argc, char ** argv)
 
 
 
-            if (myId == 2)
+            if(myId==2)
                 if (!image.empty())
                     resImgPublisher->Publish(imageProcess(image,playerNode)); // 处理完的图像可以通过该方式发布出去，然后通过rqt中的image_view工具查看
 
@@ -435,23 +435,32 @@ void headFollow(common::msg::HeadTask& htask,common::msg::HeadAngles& headAngle)
 
     }
 
-    if(headFollowTarget==ball)
+    switch(headFollowTarget)
     {
-        target=cv::Point2f(ballInView[0],ballInView[1]);
-        distance=ballDistance;
-    }
-    else if(headFollowTarget==goal)
-    {
-        target=goalInView.center;
-        distance=2450;
-    }
-    else
-    {
-        hFollow.sumError=vFollow.sumError=0;
-        return;
+        case ball:
+            target=cv::Point2f(ballInView[0],ballInView[1]);
+            distance=ballDistance;
+            break;
+
+        case goal:
+            target=goalInView.center;
+            distance=2450;
+            break;
+
+        case robot:
+            target=robotInView.center;
+            distance=640;
+            break;
+
+        case none:
+            hFollow.sumError=vFollow.sumError=0;
+            return;
+
+        default:
+            break;
     }
     
-    
+
 
     if(target.x>0)
     {
@@ -596,104 +605,58 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
 
 
-    // ball detect
-    static int minRadius=1,maxRadius=64;
-    static cv::Rect possBallRegion={0,0,511,511};
-    static float radiusMafBuffer[5]={0};
+    // anti robot detect
+    cv::findContours(filteredImg3,robotContours,robotHierachy,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE,cv::Point(-1,-1));
+    // cv::drawContours(resultImg,robotContours,-1,cv::Scalar(0,255,255),1,8,robotHierachy);
 
-    cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1,128,64,20,minRadius,maxRadius);
-    // cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1.5,128,100,25,4,72);
-
-    if(circleSeq.empty())
+    if(robotContours.empty())
     {
-        // RCLCPP_INFO(playerNode->get_logger(),"--ball not found");
-        trueBallFoundFlag=false;
+        robotFoundFlag=false;
     }
     else
     {
-        // RCLCPP_INFO(playerNode->get_logger(),"--one or more ball found");
 
-        static float maxWhiteRatio;
-        maxWhiteRatio=0.5;
-
-        for(auto item:circleSeq)
+        // find biggest area
+        static int maxArea;
+        static double tmpArea;
+        maxArea=(defenseFlag==true?64:1920);
+        // (defenseFlag==true?64:1920)
+        for(auto item:robotContours)
         {
-            cv::circle(resultImg,cv::Point2f(item[0],item[1]),item[2],cv::Scalar(255,0,0));
-            // RCLCPP_INFO(playerNode->get_logger(),"(%f,%f),%f",item[0],item[1],item[2]);
-
-            // white ratio cal
-            static int whiteCount,pixelCount;
-            whiteCount=pixelCount=0;
-
-            if(!possBallRegion.contains(cv::Point(item[0],item[1])))
-                continue;
-
-            for(int r=item[1]-item[2];r<=item[1]+item[2];r++)
+            tmpArea=cv::contourArea(item);
+            if(tmpArea>maxArea)
             {
-                for(int c=item[0]-item[2];c<=item[0]+item[2];c++)
-                {
-                    if((pow(item[1]-r,2)+pow(item[0]-c,2))<=pow(item[2],2))
-                    {
-                        ++pixelCount;
-                        if(filteredImg1.at<uchar>(r,c)>2)
-                            ++whiteCount;
-                    }
-                    
-                }
+                maxArea=tmpArea;
+                robotInView=cv::minAreaRect(item);
             }
-
-            if(whiteCount/(double)pixelCount>maxWhiteRatio)
-            {
-                maxWhiteRatio=whiteCount/(double)pixelCount;
-                ballInView=item;
-            }
-
         }
-        // RCLCPP_INFO(playerNode->get_logger(),"%lf,(%f,%f)",maxWhiteRatio,ballInView[0],ballInView[1]);
 
-        if(maxWhiteRatio<=0.51)
+        if(maxArea==(defenseFlag==true?64:1920))
         {
-            trueBallFoundFlag=false;
+            robotFoundFlag=false;
         }
         else
         {
-            trueBallFoundFlag=true;
+            robotFoundFlag=true;
         }
         
     }
 
-    ballInView[2]=mafUpdate(ballInView[2],radiusMafBuffer);
-
-    if(trueBallFoundFlag)
+    if(robotFoundFlag)
     {
-        ballNotFoundElapse=0;
-         
-        cv::circle(resultImg,cv::Point2f(ballInView[0],ballInView[1]),ballInView[2],cv::Scalar(255,0,0),3);
+        cv::circle(resultImg,robotInView.center,3,cv::Scalar(0,255,255),3);
 
-        ballDistance=30*435/ballInView[2];
+        static cv::Point2f vertices[4];
+        robotInView.points(vertices);
+        for(int i=0;i<4;i++)
+            cv::line(resultImg,vertices[i],vertices[(i+1)%4],cv::Scalar(0,255,255),3);
 
-        minRadius=ballInView[2]*0.75;
-        maxRadius=ballInView[2]*1.33;
-
-        static float mult=5;
-        mult=3+(0.02)*sqrt(pow(ballInView[0]-imgCol/2,2)+pow(ballInView[1]-imgRow/2,2));
-        possBallRegion=cv::Rect(ballInView[0]-ballInView[2]*mult,ballInView[1]-ballInView[2]*mult,ballInView[2]*2*mult,ballInView[2]*2*mult);
-
-        // RCLCPP_INFO(playerNode->get_logger(),"%f",mult);
-        cv::rectangle(resultImg,possBallRegion,cv::Scalar(255,0,192),2);
     }
     else
     {
-        ballNotFoundElapse++;
-
-        minRadius=1;
-        maxRadius=64;
-
-        possBallRegion=cv::Rect(0,0,imgCol,imgRow);
+        
     }
     
-    ballFoundFlag=trueBallFoundFlag||ballNotFoundElapse<1*10;
-
 
 
 
@@ -803,62 +766,115 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 
 
 
+    
 
+    // ball detect
+    static int minRadius=1,maxRadius=64;
+    static cv::Rect possBallRegion={0,0,511,511};
+    static float radiusMafBuffer[5]={0};
 
-    // anti robot detect
-    cv::findContours(filteredImg3,robotContours,robotHierachy,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE,cv::Point(-1,-1));
-    // cv::drawContours(resultImg,robotContours,-1,cv::Scalar(0,255,255),1,8,robotHierachy);
+    cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1,128,64,25,minRadius,maxRadius);
+    // cv::HoughCircles(grayImg,circleSeq,cv::HOUGH_GRADIENT,1.5,128,100,25,4,72);
 
-    if(robotContours.empty())
+    if(circleSeq.empty())
     {
-        robotFoundFlag=false;
+        // RCLCPP_INFO(playerNode->get_logger(),"--ball not found");
+        trueBallFoundFlag=false;
     }
     else
     {
+        // RCLCPP_INFO(playerNode->get_logger(),"--one or more ball found");
 
-        // find biggest area
-        static int maxArea;
-        static double tmpArea;
-        maxArea=2560;
-        for(auto item:robotContours)
+        static float maxWhiteRatio;
+        maxWhiteRatio=0.5;
+
+        for(auto item:circleSeq)
         {
-            tmpArea=cv::contourArea(item);
-            if(tmpArea>maxArea)
+            cv::circle(resultImg,cv::Point2f(item[0],item[1]),item[2],cv::Scalar(255,0,0));
+            // RCLCPP_INFO(playerNode->get_logger(),"(%f,%f),%f",item[0],item[1],item[2]);
+
+            // white ratio cal
+            static int whiteCount,pixelCount;
+            whiteCount=pixelCount=0;
+
+            if(
+                !possBallRegion.contains(cv::Point(item[0],item[1]))||
+                (robotFoundFlag&&robotInView.boundingRect().contains(cv::Point(item[0],item[1])))||
+                (goalFoundFlag&&goalInView.boundingRect().contains(cv::Point(item[0],item[1])))
+            )
+                continue;
+
+            for(int r=item[1]-item[2];r<=item[1]+item[2];r++)
             {
-                maxArea=tmpArea;
-                robotInView=cv::minAreaRect(item);
+                for(int c=item[0]-item[2];c<=item[0]+item[2];c++)
+                {
+                    if((pow(item[1]-r,2)+pow(item[0]-c,2))<=pow(item[2],2))
+                    {
+                        ++pixelCount;
+                        if(filteredImg1.at<uchar>(r,c)>2)
+                            ++whiteCount;
+                    }
+                    
+                }
             }
-        }
 
-        if(maxArea==2560)
+            if(whiteCount/(double)pixelCount>maxWhiteRatio)
+            {
+                maxWhiteRatio=whiteCount/(double)pixelCount;
+                ballInView=item;
+            }
+
+        }
+        // RCLCPP_INFO(playerNode->get_logger(),"%lf,(%f,%f)",maxWhiteRatio,ballInView[0],ballInView[1]);
+
+        if(maxWhiteRatio<=0.51)
         {
-            robotFoundFlag=false;
+            trueBallFoundFlag=false;
         }
         else
         {
-            robotFoundFlag=true;
+            trueBallFoundFlag=true;
         }
         
     }
 
-    if(robotFoundFlag)
+    ballInView[2]=mafUpdate(ballInView[2],radiusMafBuffer);
+
+    if(trueBallFoundFlag)
     {
-        cv::circle(resultImg,robotInView.center,3,cv::Scalar(0,255,255),3);
+        ballNotFoundElapse=0;
+         
+        cv::circle(resultImg,cv::Point2f(ballInView[0],ballInView[1]),ballInView[2],cv::Scalar(255,0,0),3);
 
-        static cv::Point2f vertices[4];
-        robotInView.points(vertices);
-        for(int i=0;i<4;i++)
-            cv::line(resultImg,vertices[i],vertices[(i+1)%4],cv::Scalar(0,255,255),3);
+        ballDistance=30*435/ballInView[2];
 
+        minRadius=ballInView[2]*0.75;
+        maxRadius=ballInView[2]*1.33;
+
+        static float mult=5;
+        mult=3+(0.02)*sqrt(pow(ballInView[0]-imgCol/2,2)+pow(ballInView[1]-imgRow/2,2));
+        possBallRegion=cv::Rect(ballInView[0]-ballInView[2]*mult,ballInView[1]-ballInView[2]*mult,ballInView[2]*2*mult,ballInView[2]*2*mult);
+
+        // RCLCPP_INFO(playerNode->get_logger(),"%f",mult);
+        cv::rectangle(resultImg,possBallRegion,cv::Scalar(255,0,192),2);
     }
     else
     {
-        
+        ballNotFoundElapse++;
+
+        minRadius=1;
+        maxRadius=64;
+
+        possBallRegion=cv::Rect(0,0,imgCol,imgRow);
     }
     
+    ballFoundFlag=trueBallFoundFlag||ballNotFoundElapse<1*10;
 
 
 
+
+
+    
     return resultImg;
 
 }
@@ -870,14 +886,14 @@ void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,
 {
     if(ballFoundFlag&&knowGoalFlag)
     {
-        if(abs(headAngle.yaw)<7.5)
+        if(abs(headAngle.yaw)<8)
         {
             RCLCPP_INFO(playerNode->get_logger(),"-0-Going ahead,headAngle.yaw=%f",headAngle.yaw);
             btask.turn=0;
             btask.lateral=0;
             btask.step=1;
         }
-        else if(abs(headAngle.yaw)<15)
+        else if(abs(headAngle.yaw)<20)
         {
             RCLCPP_INFO(playerNode->get_logger(),"-1-Going ahead & tring to adjust,headAngle.yaw=%f",headAngle.yaw);
             btask.turn=0;
@@ -1124,5 +1140,6 @@ void defense(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,com
 {
     //defense
 }
+
 //********************************************************************************************************************************//
 // function implementation end
