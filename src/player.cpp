@@ -17,7 +17,8 @@
 enum headFollowTarget_type
 {
     ball,
-    goal
+    goal,
+    none
 }headFollowTarget;
 
 struct pid_type
@@ -66,15 +67,14 @@ float ballDistance;
 
 cv::RotatedRect goalInView;
 bool goalFoundFlag;
-float goalDistance;//invalid
 
 cv::RotatedRect robotInView;
 bool robotFoundFlag;
 int robotFoundTime=0;
 
 int secondFlag=0;
-bool ballInControl=true;
 bool knowGoalFlag=true;
+bool antiAttack=false;
 float yawTarget=0;
     
 int imgRow=0,imgCol=0;
@@ -94,7 +94,8 @@ pid_type bodyFollow;
 
 
 
-enum RobotColor {
+enum RobotColor 
+{
     COLOR_INVALID,
     COLOR_RED,
     COLOR_BLUE
@@ -102,11 +103,16 @@ enum RobotColor {
 
 RobotColor GetRobotColor(const std::string &name)
 {
-    if (name.find("red") != std::string::npos) {
+    if (name.find("red") != std::string::npos) 
+    {
         return COLOR_RED;
-    } else if (name.find("blue") != std::string::npos) {
+    } 
+    else if (name.find("blue") != std::string::npos) 
+    {
         return COLOR_BLUE;
-    } else {
+    } 
+    else 
+    {
         return COLOR_INVALID;
     }
 }
@@ -205,7 +211,6 @@ int main(int argc, char ** argv)
             ballInView={0,0,30};
             ballDistance=435;
             goalInView={cv::Point2f(0,0),cv::Size2f(0,0),0};
-            goalDistance=2450;
 
             if((!imgRow||!imgCol)&&!image.empty())
             {
@@ -230,83 +235,79 @@ int main(int argc, char ** argv)
 
         }
 
-        if(gameData.state==gameData.STATE_PLAY)
+        else
         {
-            secondFlag++;
-            robotFoundTime++;
-        }
+            if(gameData.state==gameData.STATE_PLAY)
+            {
+                secondFlag++;
+                robotFoundTime++;
+            }
 
 
 
-
-        if (!image.empty())
-        {
-            resImgPublisher->Publish(imageProcess(image,playerNode)); // 处理完的图像可以通过该方式发布出去，然后通过rqt中的image_view工具查看
-        }
-
-
-
-
-
-        // 将机器人的当前朝向减去init时的朝向，即可得到机器人相对于初始位置的方向，
-        // 这样可以保证自己不管是红色或者蓝色，其yaw都是在面朝对方球门时为0
-        // 下面提供这种转换的方法，需要该转换的可以把注释符号去掉
-        imuData.yaw=imuData.yaw-initYaw; 
-        imuData.yaw=abs(imuData.yaw)<180?
-                   imuData.yaw:
-                   (imuData.yaw>0?imuData.yaw-360:imuData.yaw+360);
-
-        while(headAngle.yaw>180)
-            headAngle.yaw-=360;
-        while(headAngle.yaw<-180)
-            headAngle.yaw+=360;
-        //headAngle更正
-
-
-
-
-
-        // IMU数据里的yaw信息是统一的，属于绝对方向，但是红色机器人和蓝色机器人的进球方向是不一样的，
-        // 假如红色的进球方向是0度，则蓝色的进球方向就是180度
-        // 比赛时使用什么颜色的机器人是现场决定的，所以对于两种颜色的机器人，都需要考虑如何
-        // 如果使用了上面的转换方法，则不需要再关心不同颜色机器人的方向问题
-        if(gameData.mode==gameData.MODE_NORM)
-        {
             if (myId == 1)
+                if (!image.empty())
+                    resImgPublisher->Publish(imageProcess(image,playerNode)); // 处理完的图像可以通过该方式发布出去，然后通过rqt中的image_view工具查看
+
+
+
+
+
+            // 将机器人的当前朝向减去init时的朝向，即可得到机器人相对于初始位置的方向，
+            // 这样可以保证自己不管是红色或者蓝色，其yaw都是在面朝对方球门时为0
+            // 下面提供这种转换的方法，需要该转换的可以把注释符号去掉
+            imuData.yaw=imuData.yaw-initYaw; 
+            imuData.yaw=abs(imuData.yaw)<180?
+                       imuData.yaw:
+                       (imuData.yaw>0?imuData.yaw-360:imuData.yaw+360);
+
+            while(headAngle.yaw>180)
+                headAngle.yaw-=360;
+            while(headAngle.yaw<-180)
+                headAngle.yaw+=360;
+            //headAngle更正
+
+
+
+
+
+            // IMU数据里的yaw信息是统一的，属于绝对方向，但是红色机器人和蓝色机器人的进球方向是不一样的，
+            // 假如红色的进球方向是0度，则蓝色的进球方向就是180度
+            // 比赛时使用什么颜色的机器人是现场决定的，所以对于两种颜色的机器人，都需要考虑如何
+            // 如果使用了上面的转换方法，则不需要再关心不同颜色机器人的方向问题
+            if(gameData.mode==gameData.MODE_NORM)
             {
-                headFollow(htask,headAngle);
-                followBall(headAngle,btask,playerNode);
-                findBall(htask,btask,playerNode);
-                yawControl(yawTarget,btask,imuData,playerNode);
-                passRobot(playerNode);
-                findGoal(headAngle,htask,btask,imuData,playerNode);
-                RCLCPP_INFO(playerNode->get_logger(),"btask.step=%f",btask.step);
-                RCLCPP_INFO(playerNode->get_logger(),"yawTarget=%f",yawTarget);
-                RCLCPP_INFO(playerNode->get_logger(),"robotFoundTime=%d",robotFoundTime);
-                RCLCPP_INFO(playerNode->get_logger(),"secondFlag=%d",secondFlag);
+                if (myId == 1)
+                {
+                    headFollow(htask,headAngle);
+                    followBall(headAngle,btask,playerNode);
+                    findBall(htask,btask,playerNode);
+                    yawControl(yawTarget,btask,imuData,playerNode);
+                    passRobot(playerNode);
+                    findGoal(headAngle,htask,btask,imuData,playerNode);
+                    RCLCPP_INFO(playerNode->get_logger(),"btask.step=%f",btask.step);
+                    RCLCPP_INFO(playerNode->get_logger(),"yawTarget=%f",yawTarget);
+                    RCLCPP_INFO(playerNode->get_logger(),"robotFoundTime=%d",robotFoundTime);
+                    RCLCPP_INFO(playerNode->get_logger(),"secondFlag=%d",secondFlag);
+                }
+                else if (myId == 2)
+                {
+                    headFollow(htask,headAngle);
+                    followBall(headAngle,btask,playerNode);
+                    findBall(htask,btask,playerNode);
+                    RCLCPP_INFO(playerNode->get_logger(),"ball to player2:%f",ballDistance);
+                    //defense
+                }
             }
-            else if (myId == 2)
+            else if (gameData.mode==gameData.MODE_KICK)
             {
-                // headFollow(htask,headAngle);
-                // //followBall(headAngle,btask,playerNode);
-                // findBall(htask,btask,playerNode);
-                // RCLCPP_INFO(playerNode->get_logger(),"ball to player2:%f",ballDistance);
-                // //defense
+                if (myId == 1)
+                {
+                    btask.type=btask.TASK_ACT;
+                    btask.actname="left_kick";
+                }
             }
         }
-        else if (gameData.mode==gameData.MODE_KICK)
-        {
-            if (myId == 1)
-            {
-                btask.type=btask.TASK_ACT;
-                btask.actname="left_kick";
-            }
-        }
-
-
-        
-
-
         // 复赛每个组使用两台机器人，需要根据不同的机器人id制定策略的队伍，可以利用myId进行区分
         // 机器人出界后，会将出界的机器人放回己方半场靠近中线的约0.5米处，此时该机器人会有30s的惩罚
         // 由于有两台机器人，每一天机器人重生的位置都是在己方固定的某一边，并不是从哪边出去就从哪边重生，
@@ -407,11 +408,17 @@ void headFollow(common::msg::HeadTask& htask,common::msg::HeadAngles& headAngle)
         target=cv::Point2f(ballInView[0],ballInView[1]);
         distance=ballDistance;
     }
-    else
+    else if(headFollowTarget==goal)
     {
         target=goalInView.center;
-        distance=goalDistance;
+        distance=2450;
     }
+    else
+    {
+        hFollow.sumError=vFollow.sumError=0;
+        return;
+    }
+    
     
 
     if(target.x>0)
@@ -780,7 +787,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
         // find biggest area
         static int maxArea;
         static double tmpArea;
-        maxArea=64;
+        maxArea=2560;
         for(auto item:robotContours)
         {
             tmpArea=cv::contourArea(item);
@@ -791,7 +798,7 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
             }
         }
 
-        if(maxArea==64)
+        if(maxArea==2560)
         {
             robotFoundFlag=false;
         }
@@ -829,26 +836,35 @@ cv::Mat& imageProcess(cv::Mat& image,rclcpp::Node::SharedPtr playerNode)
 //跟球移动
 void followBall(common::msg::HeadAngles& headAngle,common::msg::BodyTask& btask,rclcpp::Node::SharedPtr& playerNode)
 {
-    if(abs(headAngle.yaw)>FIND_HEADANGLE_YAW_MAX)//保持对球控制初始化
-        ballInControl=false;
-    else
-        ballInControl=true;
-    
     if(ballFoundFlag&&knowGoalFlag)
     {
-        if(ballInControl)
+        if(abs(headAngle.yaw)<7.5)
         {
-            RCLCPP_INFO(playerNode->get_logger(),"Go Ahead!");
+            RCLCPP_INFO(playerNode->get_logger(),"-0-Going ahead,headAngle.yaw=%f",headAngle.yaw);
             btask.turn=0;
             btask.lateral=0;
             btask.step=1;
         }
-        else
+        else if(abs(headAngle.yaw)<15)
         {
-            RCLCPP_INFO(playerNode->get_logger(),"I am Tring to Follow the Ball! headAngle.yaw=%f",headAngle.yaw);
+            RCLCPP_INFO(playerNode->get_logger(),"-1-Going ahead & tring to adjust,headAngle.yaw=%f",headAngle.yaw);
+            btask.turn=0;
+            btask.lateral=(0.001)*headAngle.yaw;
+            btask.step=1;
+        }
+        else if(abs(headAngle.yaw)<90)
+        {
+            RCLCPP_INFO(playerNode->get_logger(),"-2-Tring to follow the ball,headAngle.yaw=%f",headAngle.yaw);
             btask.turn=0;
             btask.lateral=(0.5)*SGN(headAngle.yaw);
             btask.step=-0.01;
+        }
+        else
+        {
+            RCLCPP_INFO(playerNode->get_logger(),"-3-Stepping backwards,headAngle.yaw=%f",headAngle.yaw);
+            btask.turn=0;
+            btask.lateral=(0.05)*SGN(headAngle.yaw);
+            btask.step=-1;
         }
     }
     else
@@ -864,14 +880,16 @@ void findBall(common::msg::HeadTask& htask,common::msg::BodyTask& btask,rclcpp::
     if(!ballFoundFlag&&headFollowTarget==ball)
     {
         RCLCPP_INFO(playerNode->get_logger(),"I am finding the ball!");
-        btask.step=0;
-        btask.lateral=0;
-        btask.turn=0;
+        btask.type=btask.TASK_ACT;
+        // btask.step=0;
+        // btask.lateral=0;
+        // btask.turn=0;
         htask.yaw+=3;
         htask.pitch=20*sin(secondFlag*0.1)+40;
     }
     else
     {
+        btask.type=btask.TASK_WALK;
         return ;
     }
     
@@ -897,16 +915,13 @@ void yawControl(float& yawTarget,common::msg::BodyTask& btask,common::msg::ImuDa
 //带球过人
 void passRobot(rclcpp::Node::SharedPtr& playerNode)
 {
-    if(ballFoundFlag&&robotFoundFlag&&(robotFoundTime>RID_DEFENSE_TIME||robotFoundTime==0)&&secondFlag>100)
+    if(ballFoundFlag&&robotFoundFlag&&(robotFoundTime>RID_DEFENSE_TIME||robotFoundTime==0)&&secondFlag>100&&knowGoalFlag==true&&ballDistance<300)
+    //看到了球&&看到了机器人&&过了摆脱防守的时间&&过了开始过人的时间（避免一开始就转向）&&知道球门在哪（不至于找球门的时候看到机器人转向）&& 自己控球
     {
         RCLCPP_INFO(playerNode->get_logger(),"I meet anti robot");
         yawTarget+=SGN(robotInView.center.x-imgCol/2)*45;
         robotFoundTime=1;//main中说明robotFoundTime++
         //可能需要更改，可能因为碰到对方机器人疯狂旋转
-    }
-    else if(robotFoundTime>3*RID_DEFENSE_TIME)
-    {
-        yawTarget=0;
     }
     else
     {
@@ -919,23 +934,53 @@ void passRobot(rclcpp::Node::SharedPtr& playerNode)
 void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
 {
     if(secondFlag%FIND_GOAL_INTERVAL==0)
+    {
         knowGoalFlag=false;
-    
+        headFollowTarget=none;
+    }
     if(!knowGoalFlag&&robotFoundTime>RID_DEFENSE_TIME)
     {
         RCLCPP_INFO(playerNode->get_logger(),"I am finding the goal!");
-        headFollowTarget=goal;
-        btask.turn=0;
-        btask.step=0;
-        btask.lateral=0;
+        RCLCPP_INFO(playerNode->get_logger(),"--%d",headFollowTarget);
+        static int goalFoundElapse=0;
+        static int delay=0;
+        
+        btask.type=btask.TASK_ACT;
+
+        // btask.turn=0;
+        // btask.step=0;
+        // btask.lateral=0;
         htask.pitch=0;
-        htask.yaw+=-10*SGN(imuData.yaw);
-        if(goalFoundFlag)
+
+        if(goalFoundFlag&&abs(imuData.yaw+headAngle.yaw)<90)
         {
-            yawTarget=imuData.yaw+headAngle.yaw;
-            headFollowTarget=ball;
-            knowGoalFlag=true;
+            goalFoundElapse++;
+            delay=0;
+
+            if(goalFoundElapse==10)
+            {
+                headFollowTarget=goal;
+            }
+            else if(goalFoundElapse>20)
+            {
+                yawTarget=imuData.yaw+headAngle.yaw;
+                headFollowTarget=ball;
+                knowGoalFlag=true;
+                goalFoundElapse=0;
+                btask.type=btask.TASK_WALK;
+            }
+
         }
+        else
+        {
+            delay++;
+            if(delay>=5)
+            {
+                htask.yaw+=-8*SGN(imuData.yaw);
+            }
+            // goalFoundElapse=0;   
+        }
+        
     }
     else
     {
@@ -943,5 +988,9 @@ void findGoal(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,co
     }
 }
 
+void defense(common::msg::HeadAngles& headAngle,common::msg::HeadTask& htask,common::msg::BodyTask& btask,common::msg::ImuData& imuData,rclcpp::Node::SharedPtr& playerNode)
+{
+    //defense
+}
 //********************************************************************************************************************************//
 // function implementation end
